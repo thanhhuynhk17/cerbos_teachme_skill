@@ -1,0 +1,41 @@
+---
+# Ví dụ ngoài bài: thuộc tính "chỉ được thêm, không được sửa" (write-once).
+# Dùng cùng solutions/0001/derived_roles_common.yaml:
+#   cp solutions/0001/derived_roles_common.yaml solutions/extra-write-once/resource_album.yaml policies/
+#
+# Cerbos không biết giá trị cũ hay mới: app phải gửi caption HIỆN TẠI (lấy từ DB) trong resource.attr,
+# và tự chọn action caption:add (đang trống) hay caption:edit (đã có).
+# DB vẫn phải chặn ghi đè (UPDATE ... WHERE caption IS NULL), vì hỏi Cerbos rồi mới ghi là hai bước tách rời.
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: "default"
+  resource: "album:object"
+  importDerivedRoles:
+    - common_roles
+  rules:
+    # 1. Chủ album được xem và comment.
+    #    Liệt kê action cụ thể thay vì '*' như bài 0001: '*' khớp MỌI action, kể cả caption:add và
+    #    caption:edit, nên nếu dùng '*' thì chủ album sửa được caption và rule 3 vô tác dụng.
+    - actions: ["view:public", "comment"]
+      effect: EFFECT_ALLOW
+      derivedRoles:
+        - owner
+
+    # 2. Mọi user được xem và comment trên album public (thử thách bài 0001).
+    - actions: ["view:public", "comment"]
+      effect: EFFECT_ALLOW
+      roles:
+        - user
+      condition:
+        match:
+          expr: request.resource.attr.public == true
+
+    # 3. Caption chỉ được THÊM khi album chưa có caption, và chỉ chủ album được thêm.
+    #    Không có rule nào cho caption:edit, nên action đó luôn bị DENY.
+    - actions: ["caption:add"]
+      effect: EFFECT_ALLOW
+      derivedRoles:
+        - owner
+      condition:
+        match:
+          expr: '!has(request.resource.attr.caption) || request.resource.attr.caption == ""'

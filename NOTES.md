@@ -1,0 +1,15 @@
+# Notes
+
+- Dạy bằng tiếng Việt, xưng "anh" với người học.
+- Người học đã biết: Docker, Python + FastAPI, RBAC/ABAC, Next.js. Chỉ dạy phần riêng của Cerbos.
+- Dự án đích: repo `turynix`, nhánh `unitegroup` (policy engine tự viết). Chưa đọc repo; khi tới phần migrate thì xin quyền đọc để lấy ví dụ thật.
+- Môi trường lab: `lab/` (up.sh, down.sh, logs.sh, fixtures.py, check.py, verify.py, quickstart.py, admin.py; `lab/pgstore/` = Postgres store + Admin API ở cổng 4592/4594 (replica), Postgres 54341). Python env quản lý bằng uv: `pyproject.toml` + `uv.lock` ở gốc workspace (cerbos SDK 0.16.1 + fastapi); chạy script bằng `uv run <file>.py` từ `lab/`. Người học muốn dùng uv, không dùng pip/venv tay. Image `ghcr.io/cerbos/cerbos:0.57.0`.
+- PDP tự nạp lại policy khi file đổi, mất khoảng 3 giây (đo ngày 2026-11-04). Nhắc người học đợi trước khi verify.
+- Câu dự đoán: dùng `<details class="predict">` + `assets/predict.js` (tự thành textarea, phải viết mới mở được đáp án, có nút sao chép gửi Claude). Gợi ý thì dùng `class="predict hint"` (giữ dạng details). Người học muốn có ô để viết câu trả lời.
+- Mỗi bài có `verify.py <bước>` làm vòng phản hồi tự chấm; bài sau nên thêm bước mới vào verify.py.
+- GLOSSARY.md: chưa tạo; thêm thuật ngữ (principal, resource, action, effect, derived role, PDP) khi người học dùng đúng.
+- **Quan trọng (phản hồi bài 0001):** Mọi câu "dự đoán" phải suy ra được từ kiến thức ĐÃ dạy trước đó trong bài. Phải dạy quy tắc trước (vd 4 bước đánh giá), chỉ rõ file/dòng nào trong `lab/` cần đọc, và trình bày dữ liệu đầu vào (bảng) trước khi hỏi. Không được bắt người học đoán khi chưa có đủ thông tin.
+- **Lab phải DRY (phản hồi của người học):** dữ liệu (CERBOS_HOST, principal, actions, resources) chỉ khai báo ở `lab/fixtures.py`; script khác import từ đó; `uv run fixtures.py` in JSON cho curl. Ngoại lệ duy nhất: `quickstart.py` là bản sao tài liệu, cố ý để độc lập. Bài mới thêm dữ liệu vào fixtures.py, không khai báo lại trong script.
+- **Bài nộp:** người học dùng Chrome riêng (máy của họ), Claude không đọc được localStorage. Vì vậy lesson được phục vụ bằng `uv run serve.py` (cổng 8901). Nút "Nộp" trong predict box và lựa chọn đầu tiên của quiz được POST lên `/api/answers` và ghi vào `answers/<tên-bài>.json` (các lần nộp cũ nằm trong `history`). Muốn xem câu trả lời của người học thì ĐỌC FILE NÀY. Đừng đọc dữ liệu trình duyệt. "Xem đáp án" chỉ mở được sau khi đã nộp. Mỗi predict/quiz cần `data-id` cố định. Script phải load theo thứ tự: answers.js → quiz.js → predict.js.
+- Repo của người học `~/git_repos/cerbos_payloadcms_ui` có stack đang chạy ở cổng 36592/54330. Chỉ ĐỌC (GET admin/policies, select). KHÔNG ghi vào store của repo; dùng `lab/pgstore` để thí nghiệm.
+- Git: repo ở `~/learning/cerbos_teachme_skill`. `answers/` và `lab/policies/*` (trừ `.gitkeep`) bị ignore: policy đang làm là của người học, repo giữ `policies/` rỗng để bài 0001 bắt đầu từ "chưa có policy". Lời giải tham khảo ở `lab/solutions/<bài>/`; bài sau cần policy cũ thì nhắc `cp solutions/0001/*.yaml policies/`.

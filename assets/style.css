@@ -1,0 +1,88 @@
+/* Shared stylesheet for every lesson and reference page in this workspace. */
+:root {
+  --bg: #fffff8; --fg: #1d1d1b; --muted: #6b6b66; --rule: #dcdccf;
+  --accent: #a33b20; --code-bg: #f3f1e6; --ok: #2f6b3a; --bad: #a3271f;
+  --allow-bg: #e3efe1; --deny-bg: #f6e2df; --note-bg: #f4efdc;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Noto Serif", serif;
+  --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1b19; --fg: #e8e6dc; --muted: #9c9a90; --rule: #3a3a35;
+    --accent: #e08a6a; --code-bg: #262622; --ok: #8fc79a; --bad: #ee8a80;
+    --allow-bg: #23362a; --deny-bg: #3d2523; --note-bg: #2c2a20;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1b19; --fg: #e8e6dc; --muted: #9c9a90; --rule: #3a3a35;
+  --accent: #e08a6a; --code-bg: #262622; --ok: #8fc79a; --bad: #ee8a80;
+  --allow-bg: #23362a; --deny-bg: #3d2523; --note-bg: #2c2a20;
+}
+* { box-sizing: border-box; }
+html { font-size: 18px; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--serif); line-height: 1.6; }
+main { max-width: 44rem; margin: 0 auto; padding: 2.5rem 16px 4rem; }
+header.lesson { border-bottom: 1px solid var(--rule); margin-bottom: 2rem; padding-bottom: 1rem; }
+.kicker { font-variant: small-caps; letter-spacing: .08em; color: var(--muted); font-size: .85rem; }
+h1 { font-weight: 400; font-size: 2.1rem; line-height: 1.2; margin: .3rem 0 .6rem; }
+h2 { font-weight: 400; font-style: italic; font-size: 1.45rem; margin: 2.4rem 0 .6rem; }
+h3 { font-weight: 600; font-size: 1.05rem; margin: 1.6rem 0 .4rem; }
+p, li { hyphens: auto; }
+a { color: var(--accent); text-underline-offset: 2px; }
+.subtitle { font-style: italic; color: var(--muted); margin: 0; }
+code, pre, kbd { font-family: var(--mono); font-size: .8rem; }
+code { background: var(--code-bg); padding: .05em .3em; border-radius: 3px; }
+pre { background: var(--code-bg); padding: .9rem 1rem; border-radius: 4px; overflow-x: auto; line-height: 1.45; border-left: 3px solid var(--rule); }
+pre code { background: none; padding: 0; }
+.file { font-family: var(--mono); font-size: .72rem; color: var(--muted); margin: 1rem 0 -.5rem; }
+.win { background: var(--note-bg); border-left: 3px solid var(--accent); padding: .8rem 1rem; margin: 1.2rem 0; }
+.note { color: var(--muted); font-size: .9rem; border-left: 2px solid var(--rule); padding-left: .8rem; }
+.cite { font-size: .75rem; vertical-align: super; }
+table { border-collapse: collapse; width: 100%; font-size: .85rem; margin: 1rem 0; }
+th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--rule); }
+th { font-weight: 600; }
+td.allow { background: var(--allow-bg); } td.deny { background: var(--deny-bg); }
+.table-wrap { overflow-x: auto; }
+ol.steps > li { margin-bottom: 1.2rem; }
+/* Predict-then-reveal */
+details.predict { border: 1px dashed var(--rule); border-radius: 4px; padding: .6rem .9rem; margin: 1rem 0; }
+details.predict summary { cursor: pointer; font-style: italic; color: var(--accent); }
+/* Quiz component (assets/quiz.js) */
+.quiz { border-top: 1px solid var(--rule); padding: 1rem 0; }
+.quiz .q { font-weight: 600; margin-bottom: .5rem; }
+.quiz button { display: block; width: 100%; text-align: left; font: inherit; font-size: .92rem; color: var(--fg);
+  background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: .45rem .7rem; margin: .3rem 0; cursor: pointer; }
+.quiz button:hover { border-color: var(--accent); }
+.quiz button.right { background: var(--allow-bg); border-color: var(--ok); }
+.quiz button.wrong { background: var(--deny-bg); border-color: var(--bad); }
+.quiz .why { display: none; font-size: .9rem; margin-top: .5rem; }
+.quiz.done .why { display: block; }
+.score { font-style: italic; color: var(--muted); }
+nav.foot { border-top: 1px solid var(--rule); margin-top: 3rem; padding-top: 1rem; font-size: .9rem; display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.ask { background: var(--note-bg); padding: .8rem 1rem; border-radius: 4px; margin-top: 2rem; }
+/* Reference pages: denser, print-first */
+.ref main { max-width: 60rem; }
+.ref .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 0 2rem; }
+.ref h2 { font-size: 1.15rem; border-bottom: 1px solid var(--rule); }
+@media print {
+  html { font-size: 11pt; } body { background: #fff; color: #000; }
+  main { max-width: none; padding: 0; }
+  details.predict { display: block; } details.predict > * { display: block; }
+  .quiz button { border: none; padding: 0 0 0 1rem; } nav.foot, .ask { display: none; }
+  pre { border: 1px solid #ccc; white-space: pre-wrap; }
+  a { color: #000; } .ref h2 { break-after: avoid; } pre, table { break-inside: avoid; }
+}
+/* Predict box (assets/predict.js) */
+.predict-box { border: 1px dashed var(--rule); border-radius: 4px; padding: .7rem .9rem; margin: 1rem 0; }
+.predict-q { font-style: italic; color: var(--accent); margin-bottom: .5rem; }
+.predict-box textarea { width: 100%; font: inherit; font-size: .92rem; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--rule); border-radius: 4px; padding: .5rem .6rem; resize: vertical; }
+.predict-box textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.predict-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .5rem; }
+.predict-actions button { font: inherit; font-size: .85rem; color: var(--fg); background: transparent;
+  border: 1px solid var(--rule); border-radius: 4px; padding: .3rem .7rem; cursor: pointer; }
+.predict-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.predict-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.predict-answer { margin-top: .7rem; padding-top: .5rem; border-top: 1px solid var(--rule); }
+@media print { .predict-actions { display: none; } .predict-answer[hidden] { display: block; } }
+.predict-status { font-size: .8rem; font-style: italic; color: var(--muted); align-self: center; }

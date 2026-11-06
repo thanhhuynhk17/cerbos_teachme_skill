@@ -1,0 +1,18 @@
+[project]
+name = "cerbos-learning"
+version = "0.1.0"
+description = "Lab cho các bài học Cerbos (quickstart, Python SDK)"
+requires-python = ">=3.12"
+dependencies = [
+    "cerbos>=0.16.1",
+    "fastapi>=0.162.0",
+    "pyyaml>=6.0.3",
+]
+
+[tool.uv]
+package = false
+
+# Cho Pylance/Pyright trong editor tìm thấy thư viện trong .venv do uv tạo
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

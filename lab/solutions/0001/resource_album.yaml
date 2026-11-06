@@ -1,0 +1,24 @@
+---
+# Lời giải bài 0001 (đến hết thử thách). Dùng khi lab/policies/ còn rỗng:
+#   cp solutions/0001/*.yaml policies/
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: "default"
+  importDerivedRoles:
+    - common_roles
+  resource: "album:object"
+  rules:
+    # Bước B: chủ album làm được mọi action.
+    - actions: ['*']
+      effect: EFFECT_ALLOW
+      derivedRoles:
+        - owner
+
+    # Bước C + thử thách: mọi user xem và comment được album public.
+    - actions: ['view:public', 'comment']
+      effect: EFFECT_ALLOW
+      roles:
+        - user
+      condition:
+        match:
+          expr: request.resource.attr.public == true

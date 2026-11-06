@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Policy trong Postgres</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+<header class="lesson">
+  <div class="kicker">Cerbos · Bài 0002 · khoảng 35 phút</div>
+  <h1>Policy trong Postgres: sửa quyền lúc PDP đang chạy</h1>
+  <p class="subtitle">Đưa policy của bài 0001 vào Postgres qua Admin API, sửa / tắt / xoá mà không restart, rồi tự gặp bẫy cache khi chạy nhiều PDP.</p>
+</header>
+
+<div class="win"><strong>Kết quả cần đạt:</strong> anh thêm một luật ABAC mới (<code>flagged</code>) vào Cerbos <em>đang chạy</em> chỉ bằng một lần gọi Admin API, và <code>verify.py flagged</code> báo <strong>ĐẠT ✓</strong>. Đây chính là việc nút <em>Publish</em> trong repo <code>cerbos_payloadcms_ui</code> làm.</div>
+
+<h2>0. Ôn lại bài 0001 (không xem lại bài cũ)</h2>
+<p>Bốn câu ngắn. Cố nhớ lại trước khi chọn; cảm thấy khó là đúng lúc trí nhớ đang được củng cố.</p>
+
+<div class="quiz" data-id="w1" data-answer="2">
+  <div class="q">1. Chưa có policy nào cho kind <code>album:object</code>. Kết quả cho <code>comment</code>?</div>
+  <button>ALLOW vì chưa cấm</button>
+  <button>DENY vì mặc định</button>
+  <button>Lỗi vì thiếu policy</button>
+  <button>Rỗng vì không khớp</button>
+  <div class="why">Cerbos mặc định từ chối: không có rule ALLOW nào khớp thì là DENY.</div>
+</div>
+<div class="quiz" data-id="w2" data-answer="3">
+  <div class="q">2. Rule có <code>actions: ['*']</code> có khớp action <code>comment</code> không?</div>
+  <button>Không, phải khai báo comment</button>
+  <button>Chỉ khi có condition đúng</button>
+  <button>Có, '*' khớp mọi action</button>
+  <button>Chỉ khớp các action view</button>
+  <div class="why">Action là chuỗi tuỳ đặt, không cần khai báo ở đâu trước. <code>'*'</code> khớp tất cả.</div>
+</div>
+<div class="quiz" data-id="w3" data-answer="4">
+  <div class="q">3. Trong request, <code>album:object</code> là gì?</div>
+  <button>tên một action</button>
+  <button>role của principal</button>
+  <button>id của resource</button>
+  <button>kind của resource</button>
+  <div class="why">Kind quyết định Cerbos dùng resource policy nào (<code>resource: "album:object"</code>).</div>
+</div>
+<div class="quiz" data-id="w4" data-answer="1">
+  <div class="q">4. Biểu thức CEL nào lấy <strong>id</strong> của người đang gọi?</div>
+  <button><code>request.principal.id</code></button>
+  <button><code>request.principal.attr.id</code></button>
+  <button><code>principal.attr.id</code></button>
+  <button><code>request.resource.attr.owner</code></button>
+  <div class="why"><code>id</code> và <code>roles</code> là field có sẵn của principal. <code>attr.*</code> chỉ chứa thuộc tính tuỳ ý anh gửi kèm.</div>
+</div>
+<p class="score" id="quiz-score"></p>
+
+<h2>1. Policy có thể nằm ở đâu</h2>
+<p>Ở bài 0001, PDP đọc policy từ <strong>thư mục</strong> (driver <code>disk</code>) và tự theo dõi file thay đổi. Cerbos còn nhiều <strong>storage driver</strong> khác<span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/configuration/storage.html">[storage]</a></span>:</p>
+<div class="table-wrap"><table>
+<tr><th>Driver</th><th>Cập nhật policy bằng cách</th><th>Ghi qua Admin API?</th></tr>
+<tr><td><code>disk</code></td><td>sửa file (+ <code>watchForChanges</code>)</td><td class="deny">không</td></tr>
+<tr><td><code>git</code>, <code>blob</code> (S3…)</td><td>commit / upload, PDP <em>poll</em> định kỳ</td><td class="deny">không</td></tr>
+<tr><td><code>postgres</code>, <code>mysql</code>, <code>sqlite3</code></td><td>gọi <strong>Admin API</strong></td><td class="allow">có</td></tr>
+<tr><td><code>hub</code></td><td>Cerbos Hub push bundle xuống (mục 6)</td><td class="deny">không</td></tr>
+</table></div>
+<p>Một dashboard sửa quyền tự host cần hai thứ: một <strong>mutable store</strong> (Postgres) và <strong>Admin API</strong> được bật.</p>
+
+<h3>Admin API đi đường nào</h3>
+<pre><code>Dashboard / admin.py ──POST /admin/policy (basic auth)──► PDP ──ghi──► Postgres (bảng cerbos.policy)
+                                                          │
+                                                          └─ cập nhật CACHE của chính PDP này
+App ──CheckResources──► PDP (đọc từ cache)</code></pre>
+<p>Hai điều cần nhớ, lấy từ docs<span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/configuration/storage.html">[storage, mục Postgres]</a></span><span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/api/admin_api.html">[admin_api]</a></span>:</p>
+<ol>
+  <li>PDP giữ policy đã compile trong <strong>cache bộ nhớ</strong>. Khi ghi qua Admin API, <em>chính PDP nhận request</em> cập nhật cache của nó ngay. Không có bước "theo dõi file" nào cả.</li>
+  <li>Admin API bắt buộc đăng nhập (basic auth, một tài khoản admin duy nhất). Không cấu hình thì tài khoản mặc định là <code>cerbos</code> / <code>cerbosAdmin</code>. Lab dùng tài khoản mặc định này; môi trường thật phải đổi mật khẩu và bật TLS.</li>
+</ol>
+
+<h2>2. Chuẩn bị lab</h2>
+<div class="table-wrap"><table>
+<tr><th>File (trong <code>lab/</code>)</th><th>Dùng để</th></tr>
+<tr><td><code>pgstore/docker-compose.yml</code></td><td>Postgres (cổng 54341) + Cerbos đọc từ Postgres (cổng <strong>4592</strong>); có thêm một <em>replica</em> (4594) cho mục 5</td></tr>
+<tr><td><code>pgstore/schema.sql</code></td><td>Script tạo bảng, chép <em>nguyên văn</em> từ docs. Cerbos <strong>không tự tạo bảng</strong> trong Postgres</td></tr>
+<tr><td><code>pgstore/cerbos.yaml</code></td><td><code>storage.driver: postgres</code> + <code>adminAPI.enabled: true</code></td></tr>
+<tr><td><code>admin.py</code></td><td>CLI gọi Admin API: <code>put</code>, <code>list</code>, <code>get</code>, <code>disable</code>, <code>enable</code>, <code>delete</code>, <code>reload</code></td></tr>
+<tr><td><code>pgstore/psql.sh</code></td><td>Xem thẳng bảng trong Postgres</td></tr>
+</table></div>
+<pre><code>cd ~/learning/cerbos_teachme_skill/lab
+cat pgstore/cerbos.yaml          # đọc cấu hình trước
+./pgstore/up.sh                  # → "Cerbos (Postgres store) sẵn sàng"
+export CERBOS_HOST=http://localhost:4592   # check.py / verify.py giờ hỏi PDP mới</code></pre>
+<p class="note">PDP của bài 0001 (cổng 3592, đọc <code>lab/policies</code>) không liên quan đến PDP này. File YAML trong <code>lab/policies</code> chỉ là <em>nguyên liệu</em> để đẩy lên.</p>
+<p class="note">Bài này đẩy lên hai file policy anh viết ở bài 0001. Nếu <code>lab/policies/</code> đang rỗng (ví dụ vừa clone repo về), chép lời giải vào trước: <code>cp solutions/0001/*.yaml policies/</code>.</p>
+
+<h2>3. Bước A: database trống</h2>
+<details class="predict" data-id="a-empty-db"><summary>Dự đoán: <code>uv run verify.py deny-all</code> trên PDP mới (Postgres chưa có dòng nào) sẽ ĐẠT hay CHƯA ĐẠT? Vì sao?</summary>
+<p><strong>ĐẠT.</strong> Bảng <code>cerbos.policy</code> trống, nên không có resource policy cho <code>album:object</code>, và mọi action bị DENY theo mặc định. Đổi nơi lưu policy không làm đổi quy tắc đánh giá.</p></details>
+<pre><code>uv run admin.py list            # → {} : chưa có policy
+uv run verify.py deny-all</code></pre>
+
+<h2>4. Bước B: đẩy policy, sửa, tắt</h2>
+<h3>B1. Đẩy hai file YAML của bài 0001</h3>
+<p><code>admin.py put</code> đọc các file YAML, đổi thành JSON rồi gửi <code>POST /admin/policy</code> với body <code>{"policies": [...]}</code>. Repo của anh làm đúng việc này trong <code>src/cerbos/admin.ts</code>.</p>
+<details class="predict" data-id="b-no-sleep"><summary>Dự đoán: ngay sau <code>put</code>, có cần <code>sleep 3</code> như bài 0001 thì <code>verify.py challenge</code> mới ĐẠT không? Dựa vào điều nào ở mục 1?</summary>
+<p><strong>Không cần chờ.</strong> Ở bài 0001, PDP phải phát hiện file đổi (watch) nên mất khoảng 3 giây. Còn ở đây, Admin API ghi thẳng vào PDP, và PDP cập nhật cache của chính nó ngay khi xử lý request (điều 1, mục 1). Khi em chạy thử, <code>verify</code> ĐẠT ngay lần gọi đầu tiên.</p></details>
+<pre><code>uv run admin.py put policies/
+uv run admin.py list            # → derived_roles.common_roles, resource.album_object.vdefault
+uv run verify.py challenge
+./pgstore/psql.sh -c "select id, kind, name, version, disabled from policy;"</code></pre>
+<p>Để ý <strong>policy ID</strong>: <code>resource.album_object.vdefault</code>, tức là <code>resource.</code> + kind (dấu <code>:</code> đổi thành <code>_</code>) + <code>.v</code> + version. Các lệnh <code>get</code>/<code>disable</code>/<code>delete</code> đều dùng ID này. Cột <code>definition</code> là <code>BYTEA</code>, nên đừng sửa policy bằng SQL; chỉ ghi qua Admin API.</p>
+
+<h3>B2. Sửa một rule</h3>
+<p>Mở <code>policies/resource_album.yaml</code>, đổi rule thứ hai về như cũ là <code>actions: ['view:public']</code> (bỏ <code>comment</code>), rồi đẩy lại.</p>
+<details class="predict" data-id="b-update"><summary>Dự đoán: sau khi đẩy lại, bước nào của <code>verify.py</code> sẽ ĐẠT: <code>owner</code>, <code>public</code> hay <code>challenge</code>?</summary>
+<p><strong><code>public</code>.</strong> Đây chính là policy ở Bước C của bài 0001: DAFFY002 xem được nhưng không comment được. <code>POST /admin/policy</code> vừa <em>thêm</em> vừa <em>cập nhật</em> theo policy ID.</p></details>
+<pre><code>uv run admin.py put policies/resource_album.yaml
+uv run verify.py public
+./pgstore/psql.sh -c "select revision_id, action, name, disabled, update_timestamp from policy_revision order by 1;"</code></pre>
+<p>Bảng <code>policy_revision</code> do trigger trong <code>schema.sql</code> ghi lại: <em>mỗi</em> lần thêm, sửa hay tắt policy đều thêm một dòng. Anh có sẵn audit trail ở tầng DB mà không phải viết thêm code.</p>
+
+<h3>B3. Tắt và bật lại</h3>
+<details class="predict" data-id="b-disable"><summary>Dự đoán: <code>uv run admin.py disable resource.album_object.vdefault</code> xong thì <code>verify.py</code> bước nào ĐẠT? Áp dụng bước nào trong "4 bước đánh giá" của bài 0001?</summary>
+<p><strong><code>deny-all</code>.</strong> Policy bị disable coi như không tồn tại, nên bước 1 (tìm resource policy cho kind) thất bại và mọi action bị DENY, kể cả quyền của owner. Derived roles vẫn còn, nhưng không còn rule nào dùng tới.</p></details>
+<pre><code>uv run admin.py disable resource.album_object.vdefault
+uv run verify.py deny-all
+uv run admin.py list            # không thấy nữa
+uv run admin.py list --all      # vẫn còn trong store, ở trạng thái disabled
+uv run admin.py enable resource.album_object.vdefault</code></pre>
+
+<h3>B4. Xoá thứ đang được dùng</h3>
+<p>Bảng <code>policy_dependency</code> ghi lại policy nào <code>import</code> policy nào. Ở đây <code>resource.album_object.vdefault</code> import <code>derived_roles.common_roles</code>.</p>
+<details class="predict" data-id="b-delete-dep"><summary>Dự đoán: <code>uv run admin.py delete derived_roles.common_roles</code> sẽ thế nào? (a) xoá được, owner mất quyền; (b) xoá được, không ảnh hưởng gì; (c) bị từ chối.</summary>
+<p><strong>(c) Bị từ chối:</strong> <code>HTTP 400</code> kèm <code>requiredByOtherPolicies</code>, có liệt kê <code>resource.album_object.vdefault</code>. Cerbos không cho tạo ra trạng thái hỏng. Muốn xoá thì phải xoá hoặc sửa policy phụ thuộc trước.</p></details>
+<pre><code>uv run admin.py delete derived_roles.common_roles</code></pre>
+<p class="note"><code>disable</code> giữ policy lại để bật sau; <code>delete</code> xoá hẳn. Endpoint cũ <code>DELETE /admin/policy?id=</code> đã <strong>deprecated</strong> và thực chất chỉ <em>disable</em><span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/api/admin_api.html">[admin_api]</a></span>. Test harness của repo anh (<code>test/harness/cerbos.ts:34</code>) đang dùng endpoint này. Vì vậy trong store dev của repo có các policy <code>invoice</code>/<code>plan</code>/<code>report</code> ở trạng thái disabled (em kiểm tra chỉ đọc qua <code>GET /admin/policies?includeDisabled=true</code>).</p>
+
+<h2>5. Bước C: hai PDP, một database</h2>
+<p>Muốn tải cao thì chạy nhiều PDP (replica) cùng đọc một Postgres. Bật thêm replica ở cổng 4594:</p>
+<pre><code>(cd pgstore &amp;&amp; docker compose --profile replica up -d --wait)
+CERBOS_HOST=http://localhost:4594 uv run verify.py public   # replica thấy cùng dữ liệu: ĐẠT</code></pre>
+<p>Giờ đẩy lại bản <em>challenge</em> (thêm <code>comment</code> vào rule thứ hai như cũ) <strong>qua PDP 4592</strong>:</p>
+<pre><code># sửa policies/resource_album.yaml: actions: ['view:public', 'comment']
+uv run admin.py put policies/resource_album.yaml     # gửi tới 4592
+uv run verify.py challenge                           # 4592</code></pre>
+<details class="predict" data-id="c-replica"><summary>Dự đoán: <code>CERBOS_HOST=http://localhost:4594 uv run verify.py challenge</code> (replica) sẽ ĐẠT hay CHƯA? Dựa vào điều 1 ở mục 1.</summary>
+<p><strong>CHƯA ĐẠT.</strong> Chỉ PDP <em>nhận request</em> (4592) cập nhật cache. Replica 4594 vẫn dùng policy cũ trong bộ nhớ dù database đã có bản mới. Em đã tái hiện đúng hiện tượng này trong lab. Docs đưa ra hai cách<span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/configuration/storage.html">[storage, mục Postgres]</a></span>: gọi <code>/admin/store/reload</code> trên <strong>mọi</strong> PDP sau mỗi lần publish, hoặc đặt <code>compile.cacheDuration</code> để cache tự hết hạn (các PDP <em>dần dần</em> nhất quán).</p></details>
+<pre><code>CERBOS_HOST=http://localhost:4594 uv run verify.py challenge
+CERBOS_ADMIN_HOST=http://localhost:4594 uv run admin.py reload
+CERBOS_HOST=http://localhost:4594 uv run verify.py challenge     # giờ ĐẠT
+(cd pgstore &amp;&amp; docker compose --profile replica stop cerbos-replica)</code></pre>
+<p>Đây là câu trả lời cho câu hỏi ADR-0003 trong repo của anh còn để ngỏ: <em>"How multiple replicas pick up new policies is unverified"</em>.</p>
+
+<h2>6. Liên hệ với repo và Cerbos Hub</h2>
+<h3>Repo <code>cerbos_payloadcms_ui</code></h3>
+<pre><code>Operator ─UI /matrix─► Payload (nguồn sự thật) ─snapshot → compile()─► POST /admin/policy ─► PDP ⇄ Postgres "cerbos"</code></pre>
+<p>Những gì anh vừa làm bằng <code>admin.py</code> chính là bước cuối trong chuỗi trên. Đối chiếu với lab, có hai điểm cần sửa khi đưa vào thật:</p>
+<ul>
+  <li><strong>Policy mồ côi:</strong> <code>compile()</code> chỉ sinh policy cho resource <em>đang có</em>, và publish chỉ POST. Xoá một resource khỏi catalog thì policy cũ vẫn còn trong store và vẫn ALLOW. Khi publish cần so với <code>admin.py list</code> rồi disable/delete phần thừa. (Em suy ra từ mã nguồn, chưa chạy thử trên repo.)</li>
+  <li><strong>Nhiều replica:</strong> publish phải gọi reload tới mọi PDP, hoặc đặt <code>compile.cacheDuration</code> (mục 5).</li>
+</ul>
+
+<h3>Cerbos Hub (trả phí)</h3>
+<p>Hub là <strong>control plane tuỳ chọn</strong>; PDP vẫn là binary mã nguồn mở chạy trên hạ tầng của anh<span class="cite"><a href="https://docs.cerbos.dev/cerbos-hub/">[hub]</a></span>. Policy được đưa vào <strong>policy store</strong> qua Git, CI, Hub SDK/API, <code>cerbosctl hub store</code> hoặc upload trên trình duyệt<span class="cite"><a href="https://docs.cerbos.dev/cerbos-hub/policy-stores">[policy-stores]</a></span>. Mỗi thay đổi kích hoạt một lần build (compile + chạy test), rồi Hub <strong>push</strong> bundle xuống mọi PDP, nên không cần tự reload từng PDP<span class="cite"><a href="https://docs.cerbos.dev/cerbos-hub/deployments">[deployments]</a></span>. Hub còn có playground soạn policy kiểu IDE, màn hình <em>Effect matrix</em> (chỉ để xem), và audit log tập trung. Gói miễn phí "Proof of Concept" cho 100 MAP; Development từ $25/tháng; Production từ $933/tháng<span class="cite"><a href="https://www.cerbos.dev/pricing">[pricing]</a></span>.</p>
+<p>Trên các trang em đọc <strong>không thấy</strong> trình chỉnh ma trận quyền kiểu no-code cho operator, như UI <code>/matrix</code> của repo anh. Vì vậy Hub không thay được UI đó. Nó có thể thay phần "Postgres + Admin API + tự reload". So sánh đầy đủ ở <a href="../research/0001-postgres-store-admin-api-and-hub.md">research/0001</a>.</p>
+
+<h2>7. Kiểm tra</h2>
+<div class="quiz" data-id="n1" data-answer="2">
+  <div class="q">5. Admin API ghi được policy khi PDP dùng driver nào?</div>
+  <button>disk với watchForChanges</button>
+  <button>postgres với search_path</button>
+  <button>git với updatePollInterval</button>
+  <button>blob với updatePollInterval</button>
+  <div class="why">Chỉ các mutable store (postgres, mysql, sqlite3) mới nhận ghi qua Admin API.</div>
+</div>
+<div class="quiz" data-id="n2" data-answer="4">
+  <div class="q">6. Muốn chặn tạm một policy nhưng vẫn giữ lại để bật sau?</div>
+  <button><code>POST /admin/policy/delete</code></button>
+  <button><code>GET /admin/store/reload</code></button>
+  <button><code>DELETE /admin/store/revisions</code></button>
+  <button><code>POST /admin/policy/disable</code></button>
+  <div class="why">Disable giữ policy trong store (<code>list --all</code> vẫn thấy); enable là có lại ngay.</div>
+</div>
+<div class="quiz" data-id="n3" data-answer="1">
+  <div class="q">7. Ba PDP dùng chung Postgres. Cách chính thức nào giúp cả ba thấy ngay bản publish mới?</div>
+  <button>Gọi store reload mọi PDP</button>
+  <button>Restart Postgres sau mỗi publish</button>
+  <button>Ghi thẳng policy vào bảng</button>
+  <button>Bật watchForChanges cho driver postgres</button>
+  <div class="why"><code>/admin/store/reload</code> trên từng PDP. Nếu chấp nhận nhất quán dần dần thì dùng <code>compile.cacheDuration</code>.</div>
+</div>
+
+<h2>8. Thử thách: luật ABAC mới, áp dụng khi PDP đang chạy</h2>
+<p>Trong <code>fixtures.py</code> có album mới <code>DAFFY_FLAGGED</code>: của Daffy, <code>public: true</code>, nhưng <code>flagged: true</code> (bị báo cáo nội dung). Yêu cầu nghiệp vụ: <strong>album bị flagged vẫn xem được, nhưng không ai ngoài chủ được comment.</strong> Các album khác giữ nguyên như bản challenge.</p>
+<ol class="steps">
+  <li>Sửa <code>policies/resource_album.yaml</code>.</li>
+  <li>Đẩy lên bằng <code>uv run admin.py put policies/resource_album.yaml</code>. Không restart PDP.</li>
+  <li><code>uv run verify.py flagged</code> phải ĐẠT cả 8 dòng.</li>
+</ol>
+<details class="predict hint"><summary>Gợi ý (chỉ mở khi bí)</summary>
+<p>Một rule có thể chỉ dành cho <code>comment</code>. Một <code>condition</code> có thể ghép nhiều biểu thức: <code>match: { all: { of: [ {expr: …}, {expr: …} ] } }</code><span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/policies/conditions">[conditions]</a></span>. Thuộc tính nằm ở <code>request.resource.attr.flagged</code>.</p></details>
+<p>Xong thì tắt lab: <code>./pgstore/down.sh</code> (thêm <code>--reset</code> nếu muốn xoá sạch dữ liệu Postgres).</p>
+
+<h2>Nguồn chính</h2>
+<p>Đọc mục <strong>Postgres driver</strong> trong <a href="https://docs.cerbos.dev/cerbos/latest/configuration/storage.html">Storage drivers</a> (đặc biệt đoạn về cache giữa nhiều instance), sau đó đọc <a href="https://docs.cerbos.dev/cerbos/latest/api/admin_api.html">Admin API</a>. Bản tra nhanh ở <a href="../reference/cerbos-cheatsheet.html">cheat sheet</a>.</p>
+
+<div class="ask"><strong>Có chỗ nào chưa rõ?</strong> Cứ hỏi em ngay trong terminal. Ví dụ: "trong repo, nên fan-out reload ở đâu?", "có nên chuyển sang Hub policy store không?". Nhớ bấm <em>Nộp</em> ở mỗi câu dự đoán; xong thử thách thì báo em để em xem câu trả lời.</div>
+
+<nav class="foot">
+  <a href="0001-first-policy-quickstart.html">← Bài 0001</a>
+  <a href="../reference/cerbos-cheatsheet.html">Cheat sheet</a>
+  <span>Bài 0003 (sắp có) →</span>
+</nav>
+</main>
+<script src="../assets/answers.js"></script>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/predict.js"></script>
+</body>
+</html>

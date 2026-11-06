@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cerbos Cheat Sheet</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body class="ref">
+<main>
+<header class="lesson">
+  <div class="kicker">Cerbos · Tra cứu nhanh · PDP 0.57.0 · Python SDK 0.16.1</div>
+  <h1>Cerbos Cheat Sheet</h1>
+  <p class="subtitle">Tóm tắt từ các bài học. Mỗi mục có link về nguồn gốc.</p>
+</header>
+
+<div class="grid">
+<section>
+<h2>Mô hình request</h2>
+<ul>
+  <li><strong>principal</strong>: <code>id</code>, <code>roles[]</code>, <code>attr{}</code></li>
+  <li><strong>resource</strong>: <code>kind</code>, <code>id</code>, <code>attr{}</code></li>
+  <li><strong>actions[]</strong>: chuỗi tuỳ đặt, vd <code>view:public</code></li>
+  <li>Kết quả: mỗi action được <code>EFFECT_ALLOW</code> hoặc <code>EFFECT_DENY</code></li>
+  <li><strong>Mặc định deny.</strong> Không rule nào khớp thì là DENY</li>
+  <li>App tự lấy <code>attr</code> từ DB và gửi kèm. Cerbos không đọc DB của anh</li>
+</ul>
+<p class="note">Nguồn: <a href="https://docs.cerbos.dev/cerbos/latest/quickstart.html">quickstart</a> · Bài <a href="../lessons/0001-first-policy-quickstart.html">0001</a></p>
+
+<h2>Cerbos quyết định thế nào</h2>
+<ol>
+  <li>Tìm resource policy có <code>resource</code> = <code>kind</code>. Không có thì DENY</li>
+  <li>Tính derived roles của principal</li>
+  <li>Rule khớp khi: action ∈ <code>actions</code> (hoặc <code>'*'</code>), principal có role ∈ <code>roles</code> hoặc derived role ∈ <code>derivedRoles</code>, và <code>condition</code> đúng</li>
+  <li>Có ALLOW khớp thì ALLOW. Không có rule nào khớp thì DENY. Cùng một role khớp cả DENY lẫn ALLOW thì DENY thắng</li>
+</ol>
+<p class="note"><a href="https://docs.cerbos.dev/cerbos/latest/policies/evaluation.html">How Cerbos evaluates requests</a></p>
+
+<h2>Chạy PDP</h2>
+<pre><code>docker run --rm --name cerbos -d \
+  -v $(pwd)/policies:/policies \
+  -p 3592:3592 -p 3593:3593 \
+  ghcr.io/cerbos/cerbos:0.57.0
+curl localhost:3592/_cerbos/health
+docker logs -f cerbos   # lỗi policy
+docker kill cerbos</code></pre>
+<ul>
+  <li><code>3592</code> HTTP (Python SDK dùng cổng này), <code>3593</code> gRPC</li>
+  <li>Sửa file trong <code>policies/</code> thì PDP tự nạp lại sau khoảng 3 giây</li>
+  <li>Policy lỗi: PDP giữ bộ cũ và ghi lỗi vào log</li>
+</ul>
+
+<h2>Gọi bằng curl</h2>
+<pre><code>curl -s "localhost:3592/api/check/resources?pretty" \
+  -d @request.json
+# trong lab: body JSON sinh từ fixtures.py
+uv run fixtures.py | curl -s \
+  "localhost:3592/api/check/resources?pretty" -d @-</code></pre>
+</section>
+
+<section>
+<h2>Derived roles</h2>
+<pre><code>---
+apiVersion: "api.cerbos.dev/v1"
+derivedRoles:
+  name: common_roles          # tên để import
+  definitions:
+    - name: owner
+      parentRoles: ["user"]   # phải có 1 role này
+      condition:
+        match:
+          expr: request.resource.attr.owner == request.principal.id</code></pre>
+<p class="note">Derived role = role tĩnh (RBAC) + điều kiện (ABAC), tính lúc request. <a href="https://docs.cerbos.dev/cerbos/latest/policies/derived_roles">docs</a></p>
+
+<h2>Resource policy</h2>
+<pre><code>---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: "default"
+  importDerivedRoles: [common_roles]
+  resource: "album:object"     # = resource.kind
+  rules:
+    - actions: ['*']           # mọi action
+      effect: EFFECT_ALLOW
+      derivedRoles: [owner]
+    - actions: ['view:public']
+      effect: EFFECT_ALLOW
+      roles: [user]            # role tĩnh
+      condition:
+        match:
+          expr: request.resource.attr.public == true</code></pre>
+<p class="note">Mỗi policy một file. <a href="https://docs.cerbos.dev/cerbos/latest/policies/resource_policies">docs</a></p>
+
+<h2>Biến CEL hay dùng</h2>
+<table>
+<tr><td><code>request.principal.id</code></td><td>id người gọi</td></tr>
+<tr><td><code>request.principal.attr.X</code></td><td>thuộc tính người gọi</td></tr>
+<tr><td><code>request.resource.attr.X</code></td><td>thuộc tính resource</td></tr>
+<tr><td><code>P</code> / <code>R</code></td><td>viết tắt của <code>request.principal</code> / <code>request.resource</code></td></tr>
+</table>
+<p class="note">CEL (Common Expression Language) là ngôn ngữ biểu thức của Google: chỉ tính ra một giá trị, không có vòng lặp, không có tác dụng phụ. Trong <code>condition</code>, biểu thức phải trả về true/false. <a href="https://cel.dev">cel.dev</a></p>
+<p class="note"><a href="https://docs.cerbos.dev/cerbos/latest/policies/conditions">docs conditions</a></p>
+</section>
+
+<section>
+<h2>Python SDK</h2>
+<pre><code>from cerbos.sdk.client import CerbosClient
+from cerbos.sdk.model import (Principal, Resource,
+    ResourceAction, ResourceList)
+
+p = Principal("bugs_bunny", roles=["user"],
+              attr={"beta_tester": True})
+r = Resource("BUGS001", "album:object",
+             attr={"owner": "bugs_bunny", "public": False})
+
+with CerbosClient(host="http://localhost:3592") as c:
+    # 1 resource, 1 action -> bool
+    c.is_allowed("comment", p, r)
+
+    # nhiều resource × nhiều action, 1 lần gọi
+    resp = c.check_resources(
+        principal=p,
+        resources=ResourceList(resources=[
+            ResourceAction(r, actions=["view:public", "comment"]),
+        ]),
+    )
+    resp.raise_if_failed()
+    resp.get_resource("BUGS001").is_allowed("comment")
+    resp.to_dict()   # JSON thô</code></pre>
+<p class="note">Cài: <code>uv add cerbos</code>. <a href="https://github.com/cerbos/cerbos-sdk-python">cerbos-sdk-python</a></p>
+
+<h2>Postgres store + Admin API</h2>
+<pre><code># cerbos.yaml
+server:
+  adminAPI:
+    enabled: true            # basic auth; mặc định cerbos/cerbosAdmin
+storage:
+  driver: postgres
+  postgres:
+    url: "postgres://u:p@host:5432/db?sslmode=disable&amp;search_path=cerbos"</code></pre>
+<table>
+<tr><td><code>POST /admin/policy</code></td><td>thêm/cập nhật <code>{"policies":[…]}</code></td></tr>
+<tr><td><code>GET /admin/policies</code></td><td>liệt kê (<code>?includeDisabled=true</code>)</td></tr>
+<tr><td><code>GET /admin/policy?id=</code></td><td>xem định nghĩa</td></tr>
+<tr><td><code>POST /admin/policy/disable?id=</code></td><td>tắt (giữ lại); <code>/enable</code> bật lại</td></tr>
+<tr><td><code>POST /admin/policy/delete?id=</code></td><td>xoá hẳn (bị từ chối nếu đang được import)</td></tr>
+<tr><td><code>GET /admin/store/reload</code></td><td>nạp lại từ DB (dùng cho replica)</td></tr>
+</table>
+<ul>
+  <li>Cerbos không tự tạo bảng: chạy script SQL trong docs trước</li>
+  <li>ID: <code>resource.album_object.vdefault</code>, <code>derived_roles.common_roles</code></li>
+  <li>Ghi qua Admin API có hiệu lực ngay trên PDP nhận request; PDP khác dùng chung DB vẫn dùng cache cũ, cần <code>store/reload</code> hoặc <code>compile.cacheDuration</code></li>
+  <li>Bảng <code>policy_revision</code> lưu lịch sử mọi thay đổi</li>
+</ul>
+<p class="note"><a href="https://docs.cerbos.dev/cerbos/latest/configuration/storage.html">storage</a> · <a href="https://docs.cerbos.dev/cerbos/latest/api/admin_api.html">admin_api</a> · Bài <a href="../lessons/0002-postgres-store-admin-api.html">0002</a></p>
+
+<h2>Bẫy đã gặp</h2>
+<ul>
+  <li>Derived role không được cấp nếu principal thiếu <code>parentRoles</code>, dù điều kiện đúng</li>
+  <li>Rule có <code>roles: [user]</code> mà không có điều kiện thì mở cho <em>mọi</em> user</li>
+  <li>Verify ngay sau khi sửa policy có thể vẫn ra kết quả cũ. Đợi khoảng 3 giây (driver <code>disk</code>)</li>
+  <li><code>DELETE /admin/policy</code> đã deprecated và chỉ <em>disable</em>; muốn xoá hẳn thì dùng <code>/admin/policy/delete</code></li>
+</ul>
+</section>
+</div>
+</main>
+</body>
+</html>

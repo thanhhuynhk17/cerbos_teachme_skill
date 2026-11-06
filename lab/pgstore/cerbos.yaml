@@ -1,0 +1,17 @@
+# Cấu hình PDP cho bài 0002: lưu policy trong Postgres + bật Admin API.
+# Nguồn: https://docs.cerbos.dev/cerbos/latest/configuration/storage.html (Postgres driver)
+#        https://docs.cerbos.dev/cerbos/latest/api/admin_api.html
+server:
+  httpListenAddr: ":3592"
+  grpcListenAddr: ":3593"
+  adminAPI:
+    enabled: true
+    # Không khai báo adminCredentials → Cerbos dùng mặc định cerbos / cerbosAdmin (theo docs Admin API).
+    # CHỈ dùng cho lab. Môi trường thật: đặt adminCredentials.passwordHash (bcrypt, base64) + bật TLS,
+    # như repo cerbos_payloadcms_ui làm ở infra/cerbos/config.yaml.
+
+storage:
+  driver: postgres
+  postgres:
+    # search_path=cerbos trỏ vào schema chứa các bảng của Cerbos (schema.sql)
+    url: "postgres://cerbos_user:cerbos_lab_pw@postgres:5432/postgres?sslmode=disable&search_path=cerbos"

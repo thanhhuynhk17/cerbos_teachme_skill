@@ -1,0 +1,43 @@
+# Lab bài 0002: Cerbos PDP đọc policy từ Postgres (mutable store) + Admin API.
+# Cổng khác lab 0001 (3592) và khác repo cerbos_payloadcms_ui (36592, 54330) để chạy song song được.
+name: cerbos-lab-pgstore
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "54341:5432"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-cerbos-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  cerbos:
+    image: ghcr.io/cerbos/cerbos:0.57.0
+    command: ["server", "--config=/config/cerbos.yaml"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4592:3592"
+      - "4593:3593"
+    volumes:
+      - ./cerbos.yaml:/config/cerbos.yaml:ro
+
+  # PDP thứ hai đọc CÙNG database, để thấy vấn đề cache giữa nhiều replica.
+  # Chỉ chạy khi cần:  docker compose --profile replica up -d --wait
+  cerbos-replica:
+    image: ghcr.io/cerbos/cerbos:0.57.0
+    profiles: ["replica"]
+    command: ["server", "--config=/config/cerbos.yaml"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4594:3592"
+    volumes:
+      - ./cerbos.yaml:/config/cerbos.yaml:ro

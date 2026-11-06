@@ -1,0 +1,17 @@
+# Bài nộp của người học (serve.py ghi vào đây)
+answers/
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Rác công cụ
+.playwright-cli/
+*.tmp
+*.bak
+
+# Policy đang làm trong lab là của người học; repo giữ policies/ rỗng để bài 0001 bắt đầu từ "chưa có policy".
+# Lời giải nằm ở lab/solutions/.
+lab/policies/*
+!lab/policies/.gitkeep

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Policy đầu tiên</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<main>
+<header class="lesson">
+  <div class="kicker">Cerbos · Bài 0001 · khoảng 20 phút</div>
+  <h1>Policy đầu tiên: từ “deny hết” đến ALLOW có điều kiện</h1>
+  <p class="subtitle">Chạy lại quickstart chính thức bằng Python, tự tay viết từng policy và tự chấm từng bước.</p>
+</header>
+
+<div class="win"><strong>Kết quả cần đạt:</strong> PDP Cerbos chạy trong Docker, anh tự viết một derived role (RBAC + ABAC) và một resource policy, rồi <code>verify.py challenge</code> báo <strong>ĐẠT ✓</strong>.</div>
+
+<p>Vì sao bài này quan trọng với mục tiêu của anh: engine tự viết trong <code>turynix</code> chắc hẳn có những đoạn kiểu <code>if user.id == obj.owner_id or (user.role == "user" and obj.public)</code>. Bài này cho anh thấy chính đoạn logic đó khi viết dưới dạng <em>policy</em> nằm ngoài code ứng dụng.</p>
+
+<h2>1. Mô hình: ứng dụng hỏi, Cerbos trả lời</h2>
+<p>Cerbos là một <strong>PDP</strong> (Policy Decision Point): một service riêng, không giữ dữ liệu của anh. Mỗi lần cần kiểm tra quyền, ứng dụng gửi ba thứ<span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/what-is-cerbos">[what-is-cerbos]</a></span>:</p>
+<ul>
+  <li><strong>principal</strong>: ai đang gọi (<code>id</code>, <code>roles</code>, <code>attr</code>)</li>
+  <li><strong>resource</strong>: đối tượng bị tác động (<code>kind</code>, <code>id</code>, <code>attr</code>)</li>
+  <li><strong>actions</strong>: những hành động muốn làm (<code>view:public</code>, <code>comment</code>…)</li>
+</ul>
+<p>Cerbos trả về một <strong>effect</strong> cho từng action: <code>EFFECT_ALLOW</code> hoặc <code>EFFECT_DENY</code>. Thuộc tính trong <code>attr</code> do <em>ứng dụng</em> tự lấy từ DB và gửi kèm. Đó là chỗ ABAC đi vào.</p>
+
+<h3>Cerbos quyết định thế nào</h3>
+<p>Với mỗi cặp (resource, action), Cerbos làm như sau. Đây là bản rút gọn cho bài này, bản đầy đủ ở <a href="https://docs.cerbos.dev/cerbos/latest/policies/evaluation.html">How Cerbos evaluates requests</a>:</p>
+<ol>
+  <li><strong>Tìm resource policy</strong> có <code>resource:</code> trùng với <code>kind</code> của resource (ở đây là <code>album:object</code>). Không tìm thấy thì bỏ qua các bước sau, mọi action bị DENY.</li>
+  <li><strong>Tính derived roles</strong>: xem principal được cấp thêm role động nào (giải thích ở Bước B).</li>
+  <li><strong>Tìm rule khớp.</strong> Một rule khớp khi <em>cả ba</em> điều sau đều đúng:
+    <ul>
+      <li>action nằm trong <code>actions:</code> của rule (<code>'*'</code> khớp mọi action);</li>
+      <li>principal có một role trong <code>roles:</code>, <em>hoặc</em> có một derived role trong <code>derivedRoles:</code>;</li>
+      <li><code>condition:</code> trả về true (rule không có condition thì coi như true).</li>
+    </ul></li>
+  <li><strong>Kết luận</strong>: có rule <code>EFFECT_ALLOW</code> khớp thì ALLOW. Không có rule nào khớp thì <strong>DENY</strong>. Nếu cùng một role khớp cả ALLOW lẫn DENY thì DENY thắng.</li>
+</ol>
+<p class="note">Anh dùng đúng 4 bước này để dự đoán ở mọi bước bên dưới.</p>
+
+<h2>2. Chuẩn bị</h2>
+<p>Cần Docker và <a href="https://docs.astral.sh/uv/">uv</a>. <code>./up.sh</code> chạy image <code>ghcr.io/cerbos/cerbos:0.57.0</code> (đúng bản quickstart dùng); lần đầu Docker sẽ tự pull image. Môi trường Python do <a href="https://docs.astral.sh/uv/">uv</a> quản lý: <code>pyproject.toml</code> + <code>uv.lock</code> ở gốc workspace khai báo SDK <code>cerbos</code> 0.16.1 và <code>fastapi</code> (vì code mẫu Python của quickstart import nó). <code>uv run</code> tự tạo/đồng bộ <code>.venv</code> trước khi chạy. Thư mục <code>lab/</code>:</p>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Dùng để</th></tr>
+<tr><td><code>up.sh</code> / <code>down.sh</code> / <code>logs.sh</code></td><td>Bật PDP (mount <code>lab/policies</code>), tắt PDP, xem log</td></tr>
+<tr><td><code>fixtures.py</code></td><td><strong>Nơi duy nhất</strong> khai báo dữ liệu: địa chỉ PDP, principal, actions, album. Chạy trực tiếp thì in ra request JSON cho curl</td></tr>
+<tr><td><code>check.py</code></td><td>Gửi request (lấy từ <code>fixtures.py</code>) và in bảng ALLOW/deny</td></tr>
+<tr><td><code>verify.py &lt;bước&gt;</code></td><td>Tự chấm: chỉ chứa kết quả mong đợi, dữ liệu lấy từ <code>fixtures.py</code></td></tr>
+<tr><td><code>policies/</code></td><td>Nơi anh viết policy. Bắt đầu bài này thì thư mục <strong>rỗng</strong> (git không theo dõi file trong đó)</td></tr>
+<tr><td><code>solutions/</code></td><td>Lời giải tham khảo. Chỉ mở sau khi tự làm xong</td></tr>
+<tr><td><code>quickstart.py</code></td><td>Bản sao code Python trong tài liệu quickstart, để đối chiếu (cố ý để độc lập, không import <code>fixtures.py</code>)</td></tr>
+</table></div>
+<pre><code>cd ~/learning/cerbos_teachme_skill/lab
+./up.sh                      # → "Cerbos đã sẵn sàng"
+uv sync                      # tạo .venv từ uv.lock (uv run cũng tự làm việc này)</code></pre>
+
+<h2>3. Bước A: chưa có policy nào</h2>
+<h3>Đọc request trước</h3>
+<p>Mở <code>lab/fixtures.py</code> (<code>cat fixtures.py</code>). Đây là nơi duy nhất khai báo dữ liệu mà <code>check.py</code> và <code>verify.py</code> gửi cho Cerbos. Phần quan trọng nằm ở dòng 17–32:</p>
+<div class="file">lab/fixtures.py (dòng 17–32)</div>
+<pre><code># ── Actions cần kiểm tra ──
+ACTIONS = ["view:public", "comment"]
+
+# ── Principal: ai đang gọi ──
+BUGS = Principal("bugs_bunny", roles=["user"], attr={"beta_tester": True})
+
+# ── Resources: các album ──
+def album(album_id: str, owner: str, public: bool) -> Resource:
+    return Resource(album_id, "album:object",
+                    attr={"owner": owner, "public": public, "flagged": False})
+
+BUGS001 = album("BUGS001", "bugs_bunny", public=False)    # của bugs_bunny, private
+DAFFY002 = album("DAFFY002", "daffy_duck", public=True)   # của daffy_duck, public
+
+# 2 album của request trong quickstart
+QUICKSTART_ALBUMS = [BUGS001, DAFFY002]</code></pre>
+<p>Tóm lại thành bảng:</p>
+<div class="table-wrap"><table>
+<tr><th></th><th>id</th><th>roles / kind</th><th>attr quan trọng</th></tr>
+<tr><td>principal</td><td><code>bugs_bunny</code></td><td><code>["user"]</code></td><td>(chưa dùng)</td></tr>
+<tr><td>resource 1</td><td><code>BUGS001</code></td><td><code>album:object</code></td><td>owner = <code>bugs_bunny</code>, public = <code>False</code></td></tr>
+<tr><td>resource 2</td><td><code>DAFFY002</code></td><td><code>album:object</code></td><td>owner = <code>daffy_duck</code>, public = <code>True</code></td></tr>
+</table></div>
+<p><code>check.py</code> gửi principal <code>BUGS</code> cùng hai album trong <code>QUICKSTART_ALBUMS</code>, mỗi album kèm đủ <code>ACTIONS</code> (gọi <code>check_resources</code>), rồi in kết quả thành bảng 2 × 2: mỗi album là một hàng, mỗi action là một cột. Mỗi ô là <code>ALLOW</code> hoặc <code>deny</code>:</p>
+<pre><code>album      view:public   comment
+BUGS001    ?             ?
+DAFFY002   ?             ?</code></pre>
+<p>Hiện tại thư mục <code>lab/policies/</code> trống: <code>ls policies/</code> sẽ không thấy file <code>.yaml</code> nào.</p>
+<details class="predict" data-id="a-deny-all"><summary>Dự đoán: dùng 4 bước ở mục 1, bốn dấu <code>?</code> sẽ là gì? Viết câu trả lời, bấm <em>Nộp</em>, rồi mới xem đáp án.</summary>
+<p>Cả bốn ô đều <strong>deny</strong>. Ngay bước 1 đã không tìm thấy resource policy nào cho <code>album:object</code>, nên mọi action bị DENY. Cerbos <em>mặc định từ chối</em><span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/quickstart.html">[quickstart]</a></span>.</p></details>
+<pre><code>uv run check.py
+uv run verify.py deny-all        # → ĐẠT ✓
+uv run quickstart.py             # tuỳ chọn: xem JSON thô (lưu ý "effect")
+# hoặc bằng curl (JSON sinh ra từ fixtures.py):
+uv run fixtures.py | curl -s "localhost:3592/api/check/resources?pretty" -d @-</code></pre>
+
+<h2>4. Bước B: derived role <code>owner</code></h2>
+<p><strong>Derived role</strong> là role được tính <em>ngay lúc request</em>: lấy một role tĩnh (RBAC) rồi thêm một điều kiện trên thuộc tính (ABAC)<span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/policies/derived_roles">[derived_roles]</a></span>. Ở đây: “là <code>user</code> <em>và</em> <code>owner</code> của resource trùng với <code>id</code> của principal”. Điều kiện viết bằng CEL<span class="cite"><a href="https://docs.cerbos.dev/cerbos/latest/policies/conditions">[conditions]</a></span>.</p>
+<p>Gõ tay hai file sau (đừng copy-paste, gõ tay giúp nhớ cấu trúc lâu hơn). Mỗi policy phải nằm trong một file riêng.</p>
+<div class="file">lab/policies/derived_roles_common.yaml</div>
+<pre><code>---
+apiVersion: "api.cerbos.dev/v1"
+derivedRoles:
+  name: common_roles
+  definitions:
+    - name: owner
+      parentRoles: ["user"]
+      condition:
+        match:
+          expr: request.resource.attr.owner == request.principal.id</code></pre>
+<div class="file">lab/policies/resource_album.yaml</div>
+<pre><code>---
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  version: "default"
+  importDerivedRoles:
+    - common_roles
+  resource: "album:object"
+  rules:
+    - actions: ['*']
+      effect: EFFECT_ALLOW
+      derivedRoles:
+        - owner</code></pre>
+<details class="predict" data-id="b-owner"><summary>Dự đoán: ô nào chuyển sang ALLOW?</summary>
+<p>Chỉ hàng <code>BUGS001</code> (cả hai action, vì <code>'*'</code> khớp mọi action). Với <code>DAFFY002</code>, <code>owner</code> là <code>daffy_duck</code> ≠ <code>bugs_bunny</code>, nên bugs_bunny không có derived role <code>owner</code> ở đó.</p></details>
+<pre><code>sleep 3; uv run verify.py owner  # PDP tự nạp lại policy, mất khoảng 3 giây</code></pre>
+<p class="note">Nếu CHƯA ĐẠT: chạy <code>./logs.sh</code>. Lỗi YAML hoặc CEL sẽ hiện ở đó và PDP giữ nguyên bộ policy cũ.</p>
+
+<h2>5. Bước C: RBAC kèm điều kiện</h2>
+<p>Thêm rule thứ hai vào cuối <code>rules:</code> trong <code>resource_album.yaml</code>: mọi <code>user</code> được <code>view:public</code> nếu album public.</p>
+<pre><code>    - actions: ['view:public']
+      effect: EFFECT_ALLOW
+      roles:
+        - user
+      condition:
+        match:
+          expr: request.resource.attr.public == true</code></pre>
+<details class="predict" data-id="c-daffy-comment"><summary>Dự đoán: <code>DAFFY002 / comment</code> bây giờ ra sao?</summary>
+<p>Vẫn <strong>deny</strong>. Rule mới chỉ nêu <code>view:public</code>, và không rule nào cho <code>comment</code> trên album của người khác. Rule mới cũng dùng <code>roles</code> (role tĩnh) chứ không dùng <code>derivedRoles</code>.</p></details>
+<pre><code>sleep 3; uv run verify.py public</code></pre>
+
+<h2>6. Kiểm tra trí nhớ</h2>
+<p>Trả lời mà không kéo lên đọc lại. Nhớ lại khó một chút là chuyện bình thường, chính việc cố nhớ giúp kiến thức ở lại lâu.</p>
+
+<div class="quiz" data-id="quiz-1" data-answer="2">
+  <div class="q">1. Thư mục policies trống. Cerbos trả về gì?</div>
+  <button>Báo lỗi thiếu policy</button>
+  <button>EFFECT_DENY cho mọi action</button>
+  <button>EFFECT_ALLOW cho mọi action</button>
+  <button>Kết quả rỗng hoàn toàn</button>
+  <div class="why">Mặc định là từ chối. Không có rule nào cho phép thì kết quả là DENY.</div>
+</div>
+
+<div class="quiz" data-id="quiz-2" data-answer="3">
+  <div class="q">2. Principal có <code>roles: ["admin"]</code>, đúng là owner của album. Chỉ có rule <code>derivedRoles: [owner]</code> (parentRoles <code>["user"]</code>). Kết quả?</div>
+  <button>ALLOW vì đúng là chủ</button>
+  <button>ALLOW vì admin luôn được</button>
+  <button>DENY vì thiếu role user</button>
+  <button>Lỗi vì role không hợp</button>
+  <div class="why">Derived role chỉ được cấp cho principal có một trong các <code>parentRoles</code>. Điều kiện owner đúng là chưa đủ.</div>
+</div>
+
+<div class="quiz" data-id="quiz-3" data-answer="4">
+  <div class="q">3. Trong CEL, biểu thức nào lấy id của người đang gọi?</div>
+  <button><code>request.resource.id</code></button>
+  <button><code>principal.attr.id</code></button>
+  <button><code>request.auth.id</code></button>
+  <button><code>request.principal.id</code></button>
+  <div class="why">Principal nằm ở <code>request.principal</code>, resource ở <code>request.resource</code>.</div>
+</div>
+
+<div class="quiz" data-id="quiz-4" data-answer="1">
+  <div class="q">4. <code>actions: ['*']</code> kèm <code>derivedRoles: [owner]</code> nghĩa là gì?</div>
+  <button>Chủ album được làm mọi action</button>
+  <button>Mọi user được làm mọi action</button>
+  <button>Chủ album chỉ được xem album</button>
+  <button>Mọi action đều bị từ chối</button>
+  <div class="why"><code>'*'</code> khớp mọi action. Rule này chỉ áp dụng cho ai có derived role <code>owner</code>.</div>
+</div>
+<p class="score" id="quiz-score"></p>
+
+<h2>7. Thử thách (quickstart bỏ ngỏ, không có đáp án)</h2>
+<p>Sửa policy để <code>bugs_bunny</code> <strong>comment được trên <code>DAFFY002</code></strong>. Bộ chấm còn dùng một album thứ ba, <code>DAFFY_SECRET</code> (của Daffy, <em>không</em> public), và album này phải vẫn <strong>deny</strong> cả hai action. Nghĩa là không được “mở toang” cho mọi user.</p>
+<pre><code>sleep 3; uv run verify.py challenge   # cần ĐẠT ✓ cả 6 dòng</code></pre>
+<details class="predict hint"><summary>Gợi ý (chỉ mở khi bí)</summary>
+<p>Album nào thì được comment? Thuộc tính nào của resource cho biết điều đó? Anh đã viết một rule có đúng điều kiện ấy ở Bước C.</p></details>
+<p>Xong thì <code>./down.sh</code>. Policy vẫn còn trong <code>lab/policies</code> cho bài sau. Lời giải tham khảo nằm ở <code>lab/solutions/0001/</code>: chỉ mở <em>sau khi</em> verify đã ĐẠT, để so cách viết.</p>
+
+<h2>Nguồn chính</h2>
+<p>Đọc lại <a href="https://docs.cerbos.dev/cerbos/latest/quickstart.html">Cerbos Quickstart</a> (bản cho PDP 0.57.0). Sau đó đọc phần “Derived roles” trong <a href="https://docs.cerbos.dev/cerbos/latest/policies/derived_roles">tài liệu derived roles</a>. Bản tóm tắt để tra nhanh nằm ở <a href="../reference/cerbos-cheatsheet.html">cheat sheet Cerbos</a>.</p>
+
+<div class="ask"><strong>Có chỗ nào chưa rõ?</strong> Cứ hỏi lại em (Claude) ngay trong terminal. Ví dụ: “vì sao derived role cần parentRoles?”, “luật X trong turynix sẽ viết thành policy thế nào?”. Làm xong thử thách thì báo em, em sẽ ghi lại tiến độ và soạn bài tiếp theo.</div>
+
+<nav class="foot">
+  <span>← (bài đầu tiên)</span>
+  <a href="../reference/cerbos-cheatsheet.html">Cheat sheet</a>
+  <a href="0002-postgres-store-admin-api.html">Bài 0002 →</a>
+</nav>
+</main>
+<script src="../assets/answers.js"></script>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/predict.js"></script>
+</body>
+</html>
